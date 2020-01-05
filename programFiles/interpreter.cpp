@@ -1,0 +1,389 @@
+#include "interpreter.h"
+
+void interpreter::dfsR(node* n) {
+	if (!n->isVisited()) {
+		n->hasBeenVisited();
+		for (auto t : n->getChildren()) {
+			dfsR(&reverseMap.at(t));
+		}
+		n->assignPost(postNum);
+		++postNum;
+	}
+}
+
+void interpreter::dfsP(node* n) {
+	if (!n->isVisited()) {
+		n->hasBeenVisited();
+		for (auto t : n->getChildren()) {
+                        dfsP(&dependencyMap.at(t));
+                }
+                sccIntVect.push_back(n->getNum());
+	}
+}
+
+relation interpreter::interpretQuerie(predicate* querie) {
+	//assumme success is true, this is for the printing of the queries
+	success = true;
+	relation newRelation = relationMap.at(querie->getID());
+
+        vector<string> querieParamList = querie->getParameterList();
+        map<string, int> seenVariables;
+        vector<string>stringVect;
+
+	//This is the select part
+        for (unsigned int i = 0; i < querieParamList.size(); ++i) {
+                string param = querieParamList.at(i);
+
+                if (param.at(0) == '\'') {
+                	newRelation.select1(i, param);
+                }
+
+                else {
+ 	               if (seenVariables.find(param) != seenVariables.end()) {
+ 	                      int j = seenVariables.at(param);
+                              newRelation.select2(i, j);
+                       }
+                       else {
+                              seenVariables.insert({param, i});
+                              stringVect.push_back(param);
+                              //intVect.push_back(i);
+                       }
+                }
+	}
+
+	//At this point, we will know if the success happened
+	if (newRelation.getTuple().size() == 0) {
+		success = false;
+	}
+
+	//rename, super easy, just change the parameterlist
+        newRelation.setAttribute(querieParamList);
+
+        //project
+        newRelation.project(seenVariables, stringVect);
+
+	//Reset the names to make it easier
+        newRelation.setAttribute(stringVect);
+
+        return newRelation;
+}
+
+void interpreter::executeInterpreter() {
+	//Create all the relations and add their attribute names
+	for (unsigned int i = 0; i < schemeVect.size(); ++i) {
+            	relation newRelation;
+                newRelation.setName(schemeVect.at(i)->getID());
+                newRelation.setAttribute(schemeVect.at(i)->getParameterList());
+
+                relationMap.insert({ schemeVect.at(i)->getID(), newRelation});
+	}
+
+	//Adds all tuples from facts to each relation
+    	for (unsigned int i = 0; i < factVect.size(); ++i) {
+		vector<string> poop = factVect.at(i)->getParameterList();
+           	relationMap[factVect.at(i)->getID()].addTuple(poop);
+     	}
+
+	int check;
+	int count = 0;
+
+//Dependency graph
+	//create a dependency graph = map from ints to nodes
+		//done in .h file
+
+	// do a for loop through all my rules, in each rule, create a node for that rule
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		node newNode;
+		newNode.setNum(i);
+		node newNode2;
+		newNode2.setNum(i);
+		// add it to the map
+		dependencyMap.insert({i,newNode});
+		reverseMap.insert({i,newNode2});
+	}
+
+	//for each rule
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		rule* currentRule = ruleVect.at(i);
+		//for each predicate in that rule
+		for (unsigned int j = 1; j < currentRule->getPredVect().size(); ++j) {
+			predicate* currentPred = currentRule->getPredVect().at(j);
+			//for each rule
+			for (unsigned int k = 0; k < ruleVect.size(); ++k) {
+				//if it's the name of the head in any rule
+				if (currentPred->getID() == ruleVect.at(k)->getPredVect().at(0)->getID()) {
+					//current rule depends on rulevect.at(k)
+					//add the rule's head's number to the node's child set
+					dependencyMap.at(i).addChild(k);
+				}
+			}
+		}
+	}
+
+	//print out dependency graph
+	//for each thing in map
+	cout << "Dependency Graph" << endl;
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		//print out the name
+		cout << "R" << i << ":";
+		node myNode = dependencyMap.at(i);
+		set <int> nodeChildren = myNode.getChildren();
+
+		if(!nodeChildren.empty()) {
+			auto iter = nodeChildren.begin();
+			while(true) {
+				cout << "R" << *iter;
+				++iter;
+				if (iter == nodeChildren.end()) {
+					break;
+				}
+				else {
+					cout << ",";
+				}
+			}
+		}
+		cout << endl;
+	}
+
+//reverse dependency graph
+	//create a new map of ints to nodes for the reverse
+		//done in .h file
+
+	//for all rules
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		node myNode = dependencyMap.at(i);
+		//for each child of a dependent node,
+		for (auto j : myNode.getChildren()) {
+			//set that node as a child to the dependent node
+			reverseMap.at(j).addChild(i);
+		}
+	}
+
+	/* //CHECK FOR REVERSE DEPENDENCY GRAPH
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+                cout << "R" << i << ": ";
+                node myNode = reverseMap.at(i);
+                for (auto j : myNode.getChildren()) {
+                        cout << "R" << j << " ";
+                }
+                cout << endl;
+        }*/
+
+//dfs forrest of reverse dependency graph
+	//jsut go through and assign post order numbers
+	//for each rule
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		//call dfsR search on all nodes in reverseMap
+		dfsR(&reverseMap.at(i));
+	}
+
+//finding scc
+	//starting at hightest post order number fround from dfs forrest,
+	//go through recursively in that dependency graph to grab a scc,
+
+	//create a vector to hold the order of nodes with 0 being the highest post order num
+	vector<int> findingScc(ruleVect.size());
+
+	// fill in this vector so that we may know which rule is the highest post order num
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		findingScc.at(ruleVect.size() - reverseMap.at(i).getPost() - 1) = i;
+	}
+
+	//for each rule
+	for (unsigned int i = 0; i < ruleVect.size(); ++i) {
+		//do the dfs forrest on the dependency graph starting at the highest post order num
+		dfsP(&dependencyMap.at(findingScc.at(i)));
+		// after the dfs search, if the corresponding scc is empty, we know we have already seen it
+		if (sccIntVect.size() != 0) {
+			//else add it to the sccVect
+			sccVect.push_back(sccIntVect);
+			//and clear it for the next node
+			sccIntVect.clear();
+		}
+	}
+
+	cout << "\nRule Evaluation\n";
+	//cout << ruleVect.at(sccVect.at(0).at(0))->toString()
+	// for all scc's
+	for (unsigned int i = 0; i < sccVect.size(); ++i) {
+		vector<int> currentScc = sccVect.at(i);
+
+		//if there's only one rule in the scc and it does not depend on itself
+		if((currentScc.size() == 1) && (dependencyMap.at(currentScc.at(0)).getChildren().count(currentScc.at(0)) == 0) ) {
+			// Then the rule is evaluated only once
+
+			count = 0;
+
+			cout << "SCC: R" << currentScc.at(0) << endl;
+
+
+			sort(currentScc.begin(), currentScc.end());
+
+                        //for each rule in the scc vect
+                        for (unsigned int j = 0; j < currentScc.size(); ++j) {
+                        	//First print out the rule
+                               	cout << ruleVect.at(currentScc.at(j))->toString();
+                            	//cout << ruleVect.at(i)->toString();
+                                //Now create a new relation starting in the actual part of that rule
+                                relation newRelation = interpretQuerie(ruleVect.at(currentScc.at(j))->getPredVect().at(1));
+                                //This will join all the meat of that rule together
+                                for (unsigned int k = 2; k < ruleVect.at(currentScc.at(j))->getPredVect().size(); ++k) {
+//
+					relation crap = interpretQuerie(ruleVect.at(currentScc.at(j))->getPredVect().at(k));
+                                   	newRelation = newRelation.join(crap);
+                                }
+
+                                map<string, int> seenVariables;
+
+                                vector<string> simpleName = ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getParameterList();
+                                for (unsigned int k = 0; k < simpleName.size(); ++k) {
+                                	for (unsigned int l = 0; l < newRelation.getAttribute().size(); ++l) {
+                                        	if (simpleName.at(k) == newRelation.getAttribute().at(l)) {
+                                                   	seenVariables[simpleName.at(k)] = l;
+                                                }
+                                        }
+                              	}
+                                newRelation.project(seenVariables, simpleName);
+                                newRelation.setAttribute(simpleName);
+
+                                //creat a funciton to compare the set of tuples of new relation and the original,
+                                //if there is a difference, change my check, and print out those different tuples
+
+                                relation poop = relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID());
+
+				//relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()) = relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect()$
+				relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).unionize(newRelation);
+				//relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()) = relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).unionize(newRelation);
+
+                                if (poop.getTuple() != relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).getTuple() ) {
+                                   	++check;
+                                }
+                   	} //end for loop of each scc
+                        ++count;
+
+			cout << count << " passes: ";
+
+                        if (currentScc.size() > 1) {
+                                cout << "R" << currentScc.at(0);
+                                for (unsigned int j = 1; j < currentScc.size(); ++j) {
+                                        cout << ",R" << currentScc.at(j);
+                                }
+                                cout << endl;
+                        }
+                        else {
+                                cout << "R" << currentScc.at(0) << endl;
+                        }
+		} //end single scc with no dependencies
+
+		//else we must repeat the evaluation of the rules until the evaluation reaches a fixed point
+		else {
+			sort(currentScc.begin(), currentScc.end());
+			count = 0;
+			cout << "SCC: ";
+			if (currentScc.size() > 1) {
+				cout << "R" << currentScc.at(0);
+				for (unsigned int j = 1; j < currentScc.size(); ++j) {
+					cout << ",R" << currentScc.at(j);
+				}
+				cout << endl;
+			}
+			else {
+				cout << "R" << currentScc.at(0) << endl;
+			}
+
+			//run the do while loop
+			do {
+		                //reset the check
+                		check = 0;
+
+				//order the ints in the scc vect
+				sort(currentScc.begin(), currentScc.end());
+
+                		//for each rule in the scc vect
+                		for (unsigned int j = 0; j < currentScc.size(); ++j) {
+                        		//First print out the rule
+					cout << ruleVect.at(currentScc.at(j))->toString();
+					//cout << "poop\n";
+                        		//Now create a new relation starting in the actual part of that rule
+                        		relation newRelation = interpretQuerie(ruleVect.at(currentScc.at(j))->getPredVect().at(1));
+                        		//This will join all the meat of that rule together
+//					cout << ruleVect.at(currentScc.at(j))->getPredVect().size() << endl;
+					for (unsigned int k = 2; k < ruleVect.at(currentScc.at(j))->getPredVect().size(); ++k) {
+//						cout << "check before join\n";
+//						if (k > 1) {
+							relation crap = interpretQuerie(ruleVect.at(currentScc.at(j))->getPredVect().at(k));
+							newRelation = newRelation.join(crap);
+//                        			}
+//						cout << "check after join\n";
+					}
+					//cout << "check here too" << endl;
+
+                        		map<string, int> seenVariables;
+
+                        		vector<string> simpleName = ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getParameterList();
+                        		for (unsigned int k = 0; k < simpleName.size(); ++k) {
+                                		for (unsigned int l = 0; l < newRelation.getAttribute().size(); ++l) {
+                                        		if (simpleName.at(k) == newRelation.getAttribute().at(l)) {
+                                       	        		seenVariables[simpleName.at(k)] = l;
+                                        		}
+                                		}
+                        		}
+                        		newRelation.project(seenVariables, simpleName);
+                        		newRelation.setAttribute(simpleName);
+
+                        		//creat a funciton to compare the set of tuples of new relation and the original,
+                        		//if there is a difference, change my check, and print out those different tuples
+
+                        		relation poop = relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID());
+					relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).unionize(newRelation);
+					//relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()) = relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).unionize(newRelation);
+
+                        		if (poop.getTuple() != relationMap.at(ruleVect.at(currentScc.at(j))->getPredVect().at(0)->getID()).getTuple() ) {
+                                		++check;
+                        		}
+                		} //end for loop of each scc
+                		++count;
+        		} while (check != 0); //end do while of dependent sccs
+			cout << count << " passes: ";
+
+                        if (currentScc.size() > 1) {
+                                cout << "R" << currentScc.at(0);
+                                for (unsigned int j = 1; j < currentScc.size(); ++j) {
+                                        cout << ",R" << currentScc.at(j);
+                                }
+                                cout << endl;
+                        }
+                        else {
+                                cout << "R" << currentScc.at(0) << endl;
+                        }
+		} //end else dependent scc
+	} //end of scc for loop
+
+	cout << "\nQuery Evaluation\n";
+	//This is the meat of project 3
+     	for (unsigned int i = 0; i < querieVect.size(); ++i) {
+              	// Prints out the queriey
+              	cout << querieVect.at(i)->getID() << "(";
+               	cout << querieVect.at(i)->getParameterList().at(0);
+               	for (unsigned int j = 1; j < querieVect.at(i)->getParameterList().size(); ++j) {
+                	cout << "," << querieVect.at(i)->getParameterList().at(j);
+             	}
+     	   	cout << ")?";
+
+                //Runs the interpreter, then prints out the quereie
+                if (interpretQuerie(querieVect.at(i)).getTuple().size() != 0) {
+                        cout << " Yes(" << interpretQuerie(querieVect.at(i)).getTuple().size() << ")\n";
+                }
+                else {
+			if (success) {
+				cout << " Yes(1)\n";
+			}
+			else {
+				cout << " No\n";
+			}
+		}
+		//print out the new relation
+		interpretQuerie(querieVect.at(i)).toString();
+	} //end query eval
+	//cout << "End of file\n\n\n";
+}//end execute interpreter
